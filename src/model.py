@@ -13,12 +13,20 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.manifold import MDS
 
 
-def compute_adds3(num_objects: int, triplets):
-    """Build a similarity matrix from triplets.
+def compute_adds3(num_objects: int, triplets: np.ndarray) -> np.ndarray:
+    """Build a similarity matrix from triplets using the AddS3 heuristic.
 
-    Each triplet ``(i, j, k)`` means object ``i`` is closer to ``j`` than to
-    ``k``. The returned matrix is symmetric, non-negative, and has a boosted
-    diagonal so it can be used directly with average linkage.
+    Each triplet (i, j, k) implies that object `i` is more similar to `j` 
+    than to `k`. The heuristic rewards the (i, j) pair by adding 1 and 
+    penalizes the (i, k) pair by subtracting 1.
+
+    Args:
+        num_objects (int): Total number of unique objects in the dataset.
+        triplets (np.ndarray): Array of shape (n_triplets, 3) where each row is (i, j, k).
+
+    Returns:
+        np.ndarray: A symmetric, non-negative similarity matrix of shape (num_objects, num_objects)
+        with a boosted diagonal, ready for average linkage.
     """
     S = np.zeros((num_objects, num_objects), dtype=float)
     triplets = np.asarray(triplets, dtype=np.int64)
@@ -38,12 +46,19 @@ def compute_adds3(num_objects: int, triplets):
     return S
 
 
-def compute_adds4(num_objects: int, quadruplets):
-    """Build a similarity matrix from quadruplets.
+def compute_adds4(num_objects: int, quadruplets: np.ndarray) -> np.ndarray:
+    """Build a similarity matrix from quadruplets using the AddS4 heuristic.
 
-    Each quadruplet ``(i, j, k, l)`` means pair ``(i, j)`` is closer than
-    pair ``(k, l)``. The implementation is a simple pair-support heuristic:
-    reward the preferred pair and penalize the rejected pair.
+    Each quadruplet (i, j, k, l) implies that the pair (i, j) is more similar 
+    than the pair (k, l). The heuristic adds 1 to the preferred pair and 
+    subtracts 1 from the rejected pair.
+
+    Args:
+        num_objects (int): Total number of unique objects in the dataset.
+        quadruplets (np.ndarray): Array of shape (n_quadruplets, 4) where each row is (i, j, k, l).
+
+    Returns:
+        np.ndarray: A symmetric, non-negative similarity matrix of shape (num_objects, num_objects).
     """
     S = np.zeros((num_objects, num_objects), dtype=float)
     quadruplets = np.asarray(quadruplets, dtype=np.int64)
@@ -63,8 +78,21 @@ def compute_adds4(num_objects: int, quadruplets):
     return S
 
 
-def average_linkage_from_similarity(S):
-    """Convert a similarity matrix into an average-linkage hierarchy."""
+def average_linkage_from_similarity(S: np.ndarray) -> np.ndarray:
+    """Convert a similarity matrix into an Average-Linkage hierarchical dendrogram.
+
+    Converts similarity scores to distance scores using D = max(S) - S, zeros 
+    out the diagonal, and applies scipy's average linkage algorithm.
+
+    Args:
+        S (np.ndarray): A square, symmetric similarity matrix.
+
+    Returns:
+        np.ndarray: The hierarchical clustering encoded as a linkage matrix.
+
+    Raises:
+        ValueError: If S is not a 2D square matrix.
+    """
     S = np.asarray(S, dtype=float)
     if S.ndim != 2 or S.shape[0] != S.shape[1]:
         raise ValueError("S must be a square similarity matrix")
@@ -75,20 +103,52 @@ def average_linkage_from_similarity(S):
     return linkage(squareform(D, checks=False), method="average")
 
 
-def adds3_al(num_objects, triplets):
+def adds3_al(num_objects: int, triplets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Execute the full AddS3-AL clustering pipeline.
+
+    Args:
+        num_objects (int): Total number of objects.
+        triplets (np.ndarray): Triplet comparisons.
+
+    Returns:
+        tuple: (linkage_tree, similarity_matrix)
+    """
     S = compute_adds3(num_objects, triplets)
     tree = average_linkage_from_similarity(S)
     return tree, S
 
 
-def adds4_al(num_objects, quadruplets):
+def adds4_al(num_objects: int, quadruplets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Execute the full AddS4-AL clustering pipeline.
+
+    Args:
+        num_objects (int): Total number of objects.
+        quadruplets (np.ndarray): Quadruplet comparisons.
+
+    Returns:
+        tuple: (linkage_tree, similarity_matrix)
+    """
     S = compute_adds4(num_objects, quadruplets)
     tree = average_linkage_from_similarity(S)
     return tree, S
 
 
-def tste_al(num_objects, triplets, n_components=10, **tste_kwargs):
-    """Proxy tSTE + average linkage using metric MDS and cosine similarity."""
+def tste_al(num_objects: int, triplets: np.ndarray, n_components: int = 10, **tste_kwargs) -> tuple[np.ndarray, np.ndarray]:
+    """Proxy implementation of tSTE + Average Linkage.
+
+    NOTE: True tSTE requires gradient descent optimization over a Student-t distribution.
+    This function implements a lightweight proxy by computing a similarity heuristic,
+    converting it to distances, embedding via Multidimensional Scaling (MDS), 
+    and then computing Cosine similarity in the embedded space.
+
+    Args:
+        num_objects (int): Total number of objects.
+        triplets (np.ndarray): Triplet comparisons.
+        n_components (int, optional): Dimensions for MDS embedding. Defaults to 10.
+
+    Returns:
+        tuple: (linkage_tree, similarity_matrix)
+    """
     triplets = np.asarray(triplets, dtype=np.int64)
     C = np.zeros((num_objects, num_objects), dtype=float)
     for i, j, k in triplets:
@@ -107,38 +167,82 @@ def tste_al(num_objects, triplets, n_components=10, **tste_kwargs):
         dissimilarity="precomputed",
         random_state=tste_kwargs.get("random_state", 42),
     ).fit_transform(D)
+    
     S = cosine_similarity(emb)
     tree = average_linkage_from_similarity(S)
     return tree, S
 
 
-def mulk3_al(num_objects, triplets, **kwargs):
-    """MulK3-style similarity estimation followed by average linkage."""
+def mulk3_al(num_objects: int, triplets: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+    """Execute the MulK3-AL clustering pipeline.
+
+    Estimates similarity by tracking the ratio of "wins" to "total comparisons"
+    for each object pair based on the provided triplets.
+
+    Args:
+        num_objects (int): Total number of objects.
+        triplets (np.ndarray): Triplet comparisons.
+
+    Returns:
+        tuple: (linkage_tree, similarity_matrix)
+    """
     triplets = np.asarray(triplets, dtype=np.int64)
-    W = np.zeros((num_objects, num_objects), dtype=float)
-    C = np.zeros((num_objects, num_objects), dtype=float)
+    W = np.zeros((num_objects, num_objects), dtype=float) # Wins matrix
+    C = np.zeros((num_objects, num_objects), dtype=float) # Comparisons matrix
+    
     for i, j, k in triplets:
+        # (i, j) is the winning pair
         W[i, j] += 1.0
         W[j, i] += 1.0
         C[i, j] += 1.0
-        C[i, k] += 1.0
         C[j, i] += 1.0
+        
+        # (i, k) is the losing pair, so it only gets a comparison count, no win
+        C[i, k] += 1.0
         C[k, i] += 1.0
 
+    # S = Wins / Comparisons
     S = np.divide(W, C, out=np.zeros_like(W), where=C > 0)
     S = (S + S.T) / 2.0
     np.fill_diagonal(S, 1.0)
+    
     tree = average_linkage_from_similarity(S)
     return tree, S
 
 
-def fourk_al(num_objects, quadruplets, **kwargs):
-    """4K-AL baseline based on the same quadruplet similarity heuristic."""
-    return run_4k_al(num_objects, quadruplets)
+def fourk_al(num_objects: int, quadruplets: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+    """Execute the 4K-AL clustering pipeline.
 
+    Calculates similarity by tracking the ratio of "wins" to "total comparisons"
+    for quadruplets. If pair (i, j) is closer than (k, l), (i, j) gets a win, 
+    but both pairs get a comparison count.
 
-def run_4k_al(num_objects, quadruplets):
-    """Baseline for quadruplets using the same pair-support heuristic as AddS4."""
-    S = compute_adds4(num_objects, quadruplets)
+    Args:
+        num_objects (int): Total number of objects.
+        quadruplets (np.ndarray): Array of shape (n_quadruplets, 4).
+
+    Returns:
+        tuple: (linkage_tree, similarity_matrix)
+    """
+    quadruplets = np.asarray(quadruplets, dtype=np.int64)
+    W = np.zeros((num_objects, num_objects), dtype=float) # Wins matrix
+    C = np.zeros((num_objects, num_objects), dtype=float) # Comparisons matrix
+    
+    for i, j, k, l in quadruplets:
+        # (i, j) wins
+        W[i, j] += 1.0
+        W[j, i] += 1.0
+        C[i, j] += 1.0
+        C[j, i] += 1.0
+        
+        # (k, l) loses
+        C[k, l] += 1.0
+        C[l, k] += 1.0
+
+    # S = Wins / Comparisons
+    S = np.divide(W, C, out=np.zeros_like(W), where=C > 0)
+    S = (S + S.T) / 2.0
+    np.fill_diagonal(S, 1.0)
+    
     tree = average_linkage_from_similarity(S)
     return tree, S
