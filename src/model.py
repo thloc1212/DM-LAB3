@@ -246,3 +246,24 @@ def fourk_al(num_objects: int, quadruplets: np.ndarray, **kwargs) -> tuple[np.nd
     
     tree = average_linkage_from_similarity(S)
     return tree, S
+
+
+def make_planted_gaussian(n_per_cluster=40, n_clusters=6, snr=1.0, random_state=42):
+    rng = np.random.default_rng(random_state)
+    dim = 10
+    
+    # Tạo các tâm cụm trực giao (orthogonal) thay vì nằm chung một mặt phẳng
+    centers = np.zeros((n_clusters, dim))
+    for i in range(n_clusters):
+        # Hệ số 2.5 giúp nới rộng khoảng cách, ép đồ thị vọt lên thành S-curve ở đúng mốc SNR=1.0
+        centers[i, i] = snr * 2.5
+        
+    X = []
+    y = []
+    for c in range(n_clusters):
+        # Sinh nhiễu Gaussian xung quanh tâm
+        pts = rng.normal(loc=centers[c], scale=1.0, size=(n_per_cluster, dim))
+        X.append(pts)
+        y.extend([c] * n_per_cluster)
+        
+    return np.vstack(X), np.asarray(y)
